@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<job>
+<!--
+    This file is part of The Registry Files Tools available
+    at http://code.google.com/p/registry-files-tools/
+
+    Copyright (C)  2009  Olivier Mengué
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>
+-->
+<script language="JScript" src="msreg.js" />
+<script language="JScript" src="json2.js" />
+<object id="FSO" progid="Scripting.FileSystemObject" />
+<reference object="Scripting.FileSystemObject" />
+<script language="JScript"><![CDATA[
+
+
+//Utility function: Open and read a file
+function readFile(file, unicode)
+{
+    var src = "";
+    if(FSO.fileExists(file)) {
+        // Open in Unicode mode (UCS-2LE): BOM will be handled
+        var f = FSO.OpenTextFile(file, 1, false, unicode ? -1 : 0);
+        if(f) {
+            src = f.ReadAll();
+            //WScript.Echo(src.charCodeAt(0)+" "+src.charCodeAt(1)+" "+src.charCodeAt(2)+" "+src.charCodeAt(3));
+            f.Close();
+        }
+    }
+    return src;
+}
+
+
+var parser = new MSRegParser();
+
+//Main
+if (WScript.Arguments.length > 1 && WScript.Arguments(0) == "-d") {
+    WScript.Echo("Debug mode on");
+    p.withTrace = true;
+    //p.withStepByStep = true;
+    p.withParseTree = true;
+}
+
+if( WScript.Arguments.length > 0 ) {
+    var str = readFile( WScript.Arguments(WScript.Arguments.length-1), true );
+    var res = parser.parse(str);
+    if( res.errors.length > 0 ) {
+        for( i = 0; i < res.errors.length; i++ )
+           WScript.Echo( "Parse error near \"" + str.substr( res.errors[i].offset, 100 ) + ( ( str.length > res.errors[i].offset + 100 ) ? "..." : "" ) + "\", expecting \"" + res.errors[i].labels.join() + "\"" );
+    } else {
+        WScript.Echo(JSON.stringify(res.result));
+    }
+} else WScript.Echo( 'usage: cscript reg2json.wsf <filename>' );
+
+//]]></script>
+</job>
