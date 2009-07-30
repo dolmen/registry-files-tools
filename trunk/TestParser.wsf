@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<job>
+<!--
+    This file is part of The Registry Files Tools available
+    at http://code.google.com/p/registry-files-tools/
+
+    Copyright (C)  2009  Olivier Mengué
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>
+-->
+<script language="JScript" src="json2.js" />
+<script language="JScript" src="msreg.js" />
+<object id="FSO" progid="Scripting.FileSystemObject" />
+<reference object="Scripting.FileSystemObject" />
+<script language="JScript"><![CDATA[
+
+
+//Utility function: Open and read a file
+function readFile(file, unicode)
+{
+    var src = "";
+    if(FSO.fileExists(file)) {
+        // Open in Unicode mode (UCS-2LE): BOM will be handled
+        var f = FSO.OpenTextFile(file, 1, false, unicode ? -1 : 0);
+        if(f) {
+            src = f.ReadAll();
+            //WScript.Echo(src.charCodeAt(0)+" "+src.charCodeAt(1)+" "+src.charCodeAt(2)+" "+src.charCodeAt(3));
+            f.Close();
+        }
+    }
+    return src;
+}
+
+/* Main */
+
+var parser = new MSRegParser();
+
+var testsDir = FSO.GetFolder("t"), files, f, m, p, res, json, json_ref;
+var testCount = 0;
+for(files = new Enumerator(testsDir.Files); !files.atEnd(); files.moveNext()) {
+    f = files.item();
+    m = /^(.+)\.reg$/.exec(f.Name);
+    if (m != null) {
+        p = testsDir.Path+"\\"+m[1]+".json";
+        if (FSO.FileExists(p)) {
+	    testCount++;
+            res = parser.parse(readFile(f.Path, true));
+            if (res.errors.length > 0) {
+                WScript.StdOut.WriteLine("not ok "+testCount+" - "+m[1]);
+            } else {
+	        json_ref = readFile(p, true).replace(/[\r\n]*$/, '');
+		json = JSON.stringify(res.result);
+                WScript.StdOut.WriteLine((json == json_ref ? "ok ":"not ok ")+testCount+" - "+m[1]);
+	    }
+        }
+    }
+}
+WScript.StdOut.WriteLine("1.."+testCount);
+//]]></script>
+</job>

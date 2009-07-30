@@ -1,0 +1,185 @@
+/~ Compile this source with JS/CC 0.30 ~/
+
+[*
+/*
+    Parser for RegEdit files
+    This file is part of The Registry Files Tools available
+    at http://code.google.com/p/registry-files-tools/
+
+    Copyright (C)  2009  Olivier Mengué
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>
+
+*/
+
+// Encapsulate JS/CC 0.30 parser to avoid namespace pollution
+(function(){
+
+var
+	global = this,
+	undefined;
+
+// From dojo.extend() and dojo._mixin()
+var extend = function(/*Object*/ constructor, /*Object...*/ props) {
+	var empty = {}, key, proto = constructor.prototype, prop_i;
+	for(var i=1, l=arguments.length; i<l; i++){
+		prop_i = arguments[i];
+		for(k in prop_i) {
+			if (empty[k] === undefined || empty[k] != prop_i[k]) {
+				proto[k] = prop_i[k];
+			}
+		}
+		// JScript has problems with toString()
+		var p = prop_i.toString;
+		if (typeof p == "function" && p != prop_i.toString && p != empty.toString &&
+		    p != "\nfunction toString() {\n    [native code]\n}\n"){
+				proto.toString = prop_i.toString;
+		}
+	}
+	return constructor; // Object
+};
+
+var ParseResult = function(src, result, errors) {
+    this.src = src;
+	this.result = result;
+	this.errors = errors;
+};
+
+var MSRegParser = global.MSRegParser = function() {
+};
+
+extend(MSRegParser, {
+	withTrace: false,
+	withParseTree: false,
+	withStepByStep: false,
+	parse: function(src) {
+		var err_cnt, err_off = [], err_la = [];
+		##PREFIX##_dbg_withtrace = this.withTrace;
+		##PREFIX##_dbg_withparsetree = this.withParseTree;
+		##PREFIX##_dbg_withstepbystep = this.withStepByStep;
+		// Our storage for result
+		##PREFIX##_result = {};
+		// err_cnt is redundant with err_off.length
+		err_cnt = __parse(src, err_off, err_la);
+		var errors = [];
+		if (err_cnt > 0) {
+			for(var i=0; i<err_cnt; i++) {
+				errors.push({ offset: err_off[i], labels: err_la[i] });
+			}
+		}
+		return new ParseResult(src, ##PREFIX##_result, errors);
+	}
+});
+
+
+// action: '+' => create, '-' => delete
+var RegKey = function(action, path, data) {
+    var split = /^([^\\]*)\\(.*)$/.exec(path);
+    this.path = [ split[1], split[2] ];
+    if (arguments.length > 2)
+        this.data = data;
+};
+
+// action: '+' => create, '-' => delete
+// format: 'sz', 'dword', 'hex'
+// type: REG_xxx values
+var RegData = function(action, name, value) {
+    this.action = action;
+    this.name = name;
+    if (arguments.length > 2) {
+        this.type = value[0];
+        this.format = value[1];
+        this.value = value[2];
+    }
+};
+
+
+
+*]
+
+
+/~ Tokens ~/
+
+/~ Non-associative tokens ~/
+    '(\r\n)+'    CRLF
+    '[ \t]*;.*\r\n'  COMMENT
+    '\[HKEY_[^\10\13]*\] *\r\n'  KEY_CREATE [* %match = %match.replace(/\[([^\r]*)\]\s*\r\n$/, "$1");  *]
+    '\[-HKEY_[^\10\13]*\] *\r\n' KEY_REMOVE [* %match = %match.replace(/\[-([^\r]*)\]\s*\r\n$/, "$1"); *]
+    '(Windows Registry Editor Version 5.00|REGEDIT4)\r\n' HEADER
+    '@=-' DEFAULT_REMOVE  [* %match = ''; *]
+    '@=' DEFAULT_CREATE   [* %match = ''; *]
+    '"([^"\\\r]*|\\")*"=-' NAME_REMOVE  [* %match = %match.replace(/^"(.*)"=$/, "$1").replace(/\\/, ""); *]
+    '"([^"\\\r]*|\\")*"='  NAME_CREATE  [* %match = %match.replace(/^"(.*)"=$/, "$1").replace(/\\/, ""); *]
+    'dword:[0-9A-Za-z]+ *\r\n'  VALUE_DWORD
+        [* %match = [ 4, 'dword', parseInt(%match.replace(/^.*:([0-9a-zA-Z]+)\s*\r\n$/, '$1'), 16) ]; *]
+    '"(([^"\\]|\\")*)" *\r\n'      VALUE_SZ
+        [* %match = [ 1, 'sz', %match.replace(/^"((?:.|\r\n)*)"\s*$/, '$1').replace(/\\/, '') ]; *]
+    'hex(\([0-9]+\))?:([0-9a-fA-F][0-9a-fA-F](,(\\\r\n *)?[0-9a-fA-F][0-9a-fA-F])*)?\r\n'        VALUE_BINARY
+        [*
+            %match = [
+                    /^hex\((\d+)\)/.test(%match) ? %match.replace(/^hex\((\d+)\):(?:.|\r\n)*$/, '$1')
+                                                 : 3, // REG_BINARY
+                    'hex',
+                    %match.replace(/^hex.*:([\s\S]*)\r\n$/, '$1').replace(/\\\r\n */g, '') ];
+        *]
+    ;
+
+##
+/~ Grammar rules ~/
+
+file	: HEADER empty_lines sections [* ##PREFIX##_result = %% = %3; *]
+		;
+
+empty_lines : empty_lines COMMENT
+			| empty_lines CRLF
+			|
+			;
+
+sections : sections section    [* %1.push(%2); %% = %1; *]
+		 |                     [* %% = []; *]
+		 ;
+
+section : KEY_CREATE data_lines empty_lines  [* %% = new RegKey('+', %1, %2); *]
+		| KEY_REMOVE empty_lines             [* %% = new RegKey('-', %1);     *]
+		;
+
+data_lines : data_lines create_line  [* %1.push(%2); %% = %1;                   *]
+		   | data_lines remove_line  [* %1.push(new RegData('-', %2)); %% = %1; *]
+		   | empty_lines             [* %% = [];                                *]
+		   ;
+
+create_line : NAME_CREATE value     [* %% = new RegData('+', %1, %2); *]
+			| DEFAULT_CREATE value  [* %% = new RegData('+', %1, %2); *]
+			;
+
+remove_line : NAME_REMOVE
+            | DEFAULT_REMOVE
+            ;
+
+
+value : VALUE_SZ
+	  | VALUE_DWORD
+	  | VALUE_BINARY
+	  ;
+
+/~ End of grammar ~/
+
+
+[*
+
+// Close the namespace wrapper
+})();
+
+*]
+/~ vim:set ts=4 sw=4: ~/
