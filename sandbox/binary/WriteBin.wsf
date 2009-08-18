@@ -19,14 +19,25 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>
 -->
+<!--
 <object id="FSO" progid="Scripting.FileSystemObject" />
 <object id="stream" progid="ADODB.Stream"/>
 <object id="rs" progid="ADODB.Recordset"/>
+-->
 <reference object="Scripting.FileSystemObject" />
 <reference object="ADODB.Stream"/>
 <script language="JScript"><![CDATA[
 
-var unicodeToBytes = {
+function Binary(rawData)
+{
+    // rawData must be built from native data coming from COM objects
+    if (typeof rawData != 'unknown')
+        throw new Error('Invalid rawData');
+    this.rawData = rawData;
+}
+
+Binary._unicodeToBytes = {
+'1252': { // This map was created from a Windows-1252 environment
     '\u20AC': 0x80,
     '\u201A': 0x82,
     '\u0192': 0x83,
@@ -54,79 +65,24 @@ var unicodeToBytes = {
     '\u0153': 0x9C,
     '\u017E': 0x9E,
     '\u0178': 0x9F
-};
-var bytesToUnicode = {};
+}};
 
-
-function readFileBinary(filename)
-{
-    stream.Type = adTypeBinary;
-    stream.Open();
-    stream.LoadFromFile(filename);
-    var bytes = stream.Read(adReadAll);
-    stream.Close();
-    rs.Fields.Append("bin", adLongVarChar, 1);
-    rs.Open();
-    rs.AddNew();
-    rs.Fields("bin").AppendChunk(bytes);
-    rs.Update();
-    content = new String(rs.Fields("bin"));
-    rs.Close();
-    return content;
-}
-
-function writeBinaryFile(filename, content)
-{
-/*
-    rs.Fields.Append("bin", adLongVarBinary, content.length);
-    rs.Open();
-    rs.AddNew();
-    rs.Fields("bin").AppendChunk(content);
-    rs.Update();
-    content = rs.Fields("bin").GetChunk(content.length/2);
-    rs.Close();
-*/
-    WScript.Echo(typeof content);
-    for(f in content) {
-        WScript.Echo(f);
-    }
-    //WScript.StdOut.Write(content.toString());
-    stream.Type = adTypeBinary;
-    stream.Open();
-    stream.Write(content);
-    stream.SaveToFile(filename, adSaveCreateOverwrite);
-    stream.Close();
-}
-
-function stringToCharCodes(s)
-{
-    var i, l = s.length, r = new Array(l);
-    for(i=0; i<l; i++) {
-        r[i] = s.charCodeAt(i);
-    }
-    return r;
-}
-
-function charCodesToString(a)
-{
-    var i, l = a.length, r = new Array(l);
-    for(i=0; i<l; i++) {
-        r[i] = String.fromCharCode(a[i]);
-    }
-    return r.join('');
-}
-
-function charCodesToBytes(a)
-{
+Binary.fromBytes = function(a) {
     var i, l = a.length, m = l-(l&1), r = [];
     for(i=0; i<m; i+=2) {
+        if (a[i] > 255)
+            throw new Error("Invalid char code at offset "+i+": 0x"+a[i].toString(16));
+        if (a[i+1] > 255)
+            throw new Error("Invalid char code at offset "+(i+1)+": 0x"+a[i+1].toString(16));
         r.push(String.fromCharCode((a[i+1]<<8)+a[i]));
     }
-    if (m<l) {
+    if (i<l) {
+        if (a[i] > 255)
+            throw new Error("Invalid char code at offset "+i+": 0x"+a[i].toString(16));
         r.push(String.fromCharCode(a[m]));
-        //WScript.Echo(i+" "+m+" "+l+" > "+a[m]+" "+r[r.length-1]);
     }
     r = r.join('');
+    var rs = new ActiveXObject("ADODB.Recordset");
     rs.Fields.Append("bin", adLongVarBinary, l);
     rs.Open();
     rs.AddNew();
@@ -134,8 +90,94 @@ function charCodesToBytes(a)
     rs.Update();
     r = rs.Fields("bin").GetChunk(l);
     rs.Close();
+    return new Binary(r);
+}
+
+Binary.fromString = function(s)
+{
+    throw new Error("Not implemented!");
+}
+
+
+Binary.readFile = function(filename) {
+    var bin, stream = new ActiveXObject("ADODB.Stream");
+    stream.Type = adTypeBinary;
+    stream.Open();
+    stream.LoadFromFile(filename);
+    bin = new Binary(stream.Read(adReadAll));
+    stream.Close();
+    return bin;
+}
+
+Binary.prototype._toRawString = function() {
+    var rs = new ActiveXObject("ADODB.Recordset");
+    rs.Fields.Append("bin", adLongVarChar, 1);
+    rs.Open();
+    rs.AddNew();
+    rs.Fields("bin").AppendChunk(this.rawData);
+    rs.Update();
+    var s = new String(rs.Fields("bin"));
+    rs.Close();
+    return s;
+}
+
+Binary.prototype.toString = function() {
+    var s = this._toRawString();
+    var c, changed, arr = s.split(''), l = arr.length;
+    var map = Binary._unicodeToBytes['1252'];
+    for(var i=0; i<l; i++) {
+        c = arr[i].charCodeAt(0);
+        if (c <= 255) continue;
+        if (!(arr[i] in map)) throw new Error('Unexpected char at position '+i+': 0x'+c.toString(16));
+	//WScript.Echo("Mapping: "+c.toString(16)+" "+arr[i]);
+        arr[i] = String.fromCharCode(map[arr[i]]);
+        changed = true;
+    }
+    if (changed) s = arr.join('');
+    return s;
+}
+
+Binary.prototype.toBytes = function() {
+    var s = this._toRawString();
+    var i, c, d, arr = s.split(''), l = arr.length;
+    var map = Binary._unicodeToBytes['1252'];
+    for(i=0; i<l; i++) {
+        c = arr[i];
+        d = c.charCodeAt(0);
+        if (d <= 255) {
+            arr[i] = d;
+            continue;
+        }
+        if (!(c in map)) throw new Error('Unexpected char at position '+i+': 0x'+d.toString(16));
+        arr[i] = map[d];
+    }
+    return arr;
+}
+
+
+Binary.prototype.writeFile = function(filename) {
+    var stream = new ActiveXObject("ADODB.Stream");
+    stream.Type = adTypeBinary;
+    stream.Open();
+    stream.Write(this.rawData);
+    stream.SaveToFile(filename, adSaveCreateOverwrite);
+    stream.Close();
+}
+
+String.prototype.toCharCodes = function() {
+    var i, l = this.length, r = new Array(l);
+    for(i=0; i<l; i++) {
+        r[i] = this.charCodeAt(i);
+    }
     return r;
 }
+
+String.fromCharCodes = function(arr)
+{
+    return String.fromCharCode.apply(this, arr);
+}
+
+
 
 var buf = [];
 for(var i=0; i<256; i++) {
@@ -143,9 +185,13 @@ for(var i=0; i<256; i++) {
 }
 buf[256] = 65;
 
-var buf2 = charCodesToString(buf);
-WScript.StdOut.Write(buf2);
-writeBinaryFile("test.bin", charCodesToBytes(buf));
+var buf2 = String.fromCharCodes(buf);
+WScript.StdOut.WriteLine(buf2);
 
+var bin1 = Binary.fromBytes(buf);
+bin1.writeFile("test.bin");
+var bin2 = Binary.readFile("test.bin");
+if (bin1.toString() == bin2.toString())
+    WScript.Echo("ok");
 ]]></script>
 </job>
