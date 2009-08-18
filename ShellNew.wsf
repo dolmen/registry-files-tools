@@ -1,0 +1,218 @@
+<?xml version="1.0"?>
+<job>
+<!--
+    This file is part of The Registry Files Tools available
+    at http://code.google.com/p/registry-files-tools/
+
+    Copyright (C)  2009  Olivier Mengué
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>
+-->
+<runtime>
+  <description>Reads any file and output a Microsoft .inf file that can be used to register
+the file content as a template available from the Windows Explorer (File / New).
+The output file will be "FileName.inf". The registry is not altered.
+</description>
+  <named name="Binary" type="simple" required="false" helpstring="File content is binary"/>
+  <named name="File" type="simple" required="false" helpstring="Use a reference to the file instead of storing the file content in&#13;&#10;           the registry"/>
+  <unnamed name="filename" many="false" required="true" helpstring="File name"/>
+</runtime>
+<object id="FSO" progid="Scripting.FileSystemObject" />
+<object id="stream" progid="ADODB.Stream"/>
+<object id="rs" progid="ADODB.Recordset"/>
+<object id="WshShell" progid="WScript.Shell"/>
+<reference object="Scripting.FileSystemObject" />
+<reference object="ADODB.Stream"/>
+<script language="JScript"><![CDATA[
+
+
+var unicodeToBytes = {
+    '\u20AC': 0x80,
+    '\u201A': 0x82,
+    '\u0192': 0x83,
+    '\u201E': 0x84,
+    '\u2026': 0x85,
+    '\u2020': 0x86,
+    '\u2021': 0x87,
+    '\u02C6': 0x88,
+    '\u2030': 0x89,
+    '\u0160': 0x8A,
+    '\u2039': 0x8B,
+    '\u0152': 0x8C,
+    '\u017D': 0x8E,
+    '\u2018': 0x91,
+    '\u2019': 0x92,
+    '\u201C': 0x93,
+    '\u201D': 0x94,
+    '\u2022': 0x95,
+    '\u2013': 0x96,
+    '\u2014': 0x97,
+    '\u02DC': 0x98,
+    '\u2122': 0x99,
+    '\u0161': 0x9A,
+    '\u203A': 0x9B,
+    '\u0153': 0x9C,
+    '\u017E': 0x9E,
+    '\u0178': 0x9F
+};
+
+function indentedHex(content, width, binary)
+{
+    //binary = true;
+    var hex = [], n = 0, l = content.length, c = 10, i;
+    width = width || (binary ? 26 : 25);
+    for(i=0; i<l; i++) {
+        if ((n%width) == 0 || (!binary && c == 10)) {
+            hex.push(",\\\r\n  "+(binary || c == 10 ? "" : "   "));
+            n = (!binary && c == 10) ? 0 : 1;
+        } else {
+            hex.push(',');
+        }
+        c = content.charCodeAt(i);
+        if (content.charAt(i) in unicodeToBytes) {
+            c = unicodeToBytes[content.charAt(i)];
+        }
+        h = c.toString(16).toUpperCase();
+        if (h.length < 2) h = '0'+h;
+        hex.push(h);
+        n++;
+    }
+    return hex.join("");
+}
+
+function Template(res_id, re)
+{
+    this._template = getResource(res_id);
+    if (typeof re == 'undefined') re = /@([^@]*)@/g;
+    this._re = re;
+}
+
+Template.prototype.apply = function(map) {
+    return this._template.replace(this._re, function(match, name) {
+        var r = map[name];
+        if (typeof r == 'function')
+            r = r(name);
+        return r;
+    });
+}
+
+function TestSuite(testsuite)
+{
+}
+
+indentedHex.tests = TestSuite(function() {
+    eq(indentedHex(""), "");
+    eq(indentedHex("A"), ",\\\r\n  40");
+});
+
+function readFileBinary(filename)
+{
+    stream.Type = adTypeBinary;
+    stream.Open();
+    stream.LoadFromFile(filename);
+    var bytes = stream.Read(adReadAll);
+    stream.Close();
+    rs.Fields.Append("bin", adLongVarChar, 1);
+    rs.Open();
+    rs.AddNew();
+    rs.Fields("bin").AppendChunk(bytes);
+    rs.Update();
+    content = new String(rs.Fields("bin"));
+    rs.Close();
+    return content;
+}
+
+function writeTextFile(filename, content)
+{
+    var f = FSO.CreateTextFile(filename, true, false);
+    f.Write(content);
+    f.Close();
+}
+
+
+
+    if (WScript.Arguments.Unnamed.Count != 1) {
+	WScript.Arguments.ShowUsage();
+	WScript.Quit(1);
+    }
+
+    var filename, fileext, filekey, content, binary, fileref;
+
+    filename = WScript.Arguments.Unnamed(0);
+    binary = WScript.Arguments.Named.Exists("Binary");
+    fileref = WScript.Arguments.Named.Exists("File");
+    // File extension, without dot
+    //fileext = /\.([^.]*)$/.exec(filename)[1];
+    fileext = FSO.GetExtensionName(filename);
+    try {
+        filekey = WshShell.RegRead("HKCR\\."+fileext+"\\") + '\\';
+        if (filekey.length == 1) filekey = '';
+    } catch (e) {
+        filekey = '';
+    }
+
+    if (fileref) {
+	out = new Template("inf-template-file").apply({
+	    ext: fileext,
+	    key: filekey,
+            file: FSO.GetFileName(filename)
+	});
+    } else {
+        content = readFileBinary(filename);
+
+	out = new Template("inf-template-data").apply({
+	    ext: fileext,
+	    key: filekey,
+	    hex: indentedHex(content, false, binary),
+            file: FSO.GetFileName(filename)
+	});
+    }
+
+    //WScript.StdOut.Write(out);
+    writeTextFile(filename+".inf", out);
+
+//]]></script>
+<resource id="inf-template-data"><![CDATA[[Version]
+Signature="$Windows NT$"
+
+[DefaultInstall]
+AddReg=ShellNew.AddReg
+
+[ShellNew.AddReg]
+HKCR,".@ext@\@key@ShellNew","Data",1@hex@
+
+[Uninstall]
+; %SystemRoot%\System32\rundll32.exe setupapi,InstallHinfSection Uninstall 132 .\@file@.inf
+DelReg=ShellNew.DelReg
+
+[ShellNew.DelReg]
+HKCR,".@ext@\@key@ShellNew","Data"
+]]></resource>
+<resource id="inf-template-file"><![CDATA[[Version]
+Signature="$Windows NT$"
+
+[DefaultInstall]
+AddReg=ShellNew.AddReg
+
+[Uninstall]
+; %SystemRoot%\System32\rundll32.exe setupapi,InstallHinfSection Uninstall 132 .\@file@.inf
+DelReg=ShellNew.DelReg
+
+[ShellNew.AddReg]
+HKCR,".@ext@\@key@ShellNew","Filename",,"%01%\@file@"
+
+[ShellNew.DelReg]
+HKCR,".@ext@\@key@ShellNew","Filename"
+]]></resource>
+</job>
